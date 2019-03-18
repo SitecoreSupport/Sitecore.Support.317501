@@ -9,8 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Sitecore.ContentSearch.Pipelines.GetContextIndex
-
+namespace Sitecore.Support.ContentSearch.Pipelines.GetContextIndex
 {
   public class FetchIndex : GetContextIndexProcessor
   {
@@ -36,54 +35,64 @@ namespace Sitecore.ContentSearch.Pipelines.GetContextIndex
 
     protected virtual string GetContextIndex(IIndexable indexable, GetContextIndexArgs args)
     {
-      if (indexable == null)
+      try
       {
-        return null;
-      }
-      List<ISearchIndex> list = new List<ISearchIndex>();
-      foreach (ISearchIndex index in ContentSearchManager.Indexes)
-      {
-        AbstractSearchIndex abstractSearchIndex = index as AbstractSearchIndex;
-        if ((abstractSearchIndex == null || abstractSearchIndex.IsInitialized) && index.Crawlers.Any((IProviderCrawler c) => !c.IsExcludedFromIndex(indexable)))
+        if (indexable == null)
         {
-          list.Add(index);
+          return null;
         }
+        List<ISearchIndex> list = new List<ISearchIndex>();
+        foreach (ISearchIndex index in ContentSearchManager.Indexes)
+        {
+          AbstractSearchIndex abstractSearchIndex = index as AbstractSearchIndex;
+          if ((abstractSearchIndex == null || abstractSearchIndex.IsInitialized) && index.Crawlers.Any((IProviderCrawler c) => !c.IsExcludedFromIndex(indexable)))
+          {
+            list.Add(index);
+          }
+        }
+        IEnumerable<ISearchIndex> enumerable = list.AsEnumerable();
+        if (!enumerable.Any())
+        {
+          enumerable = FindIndexesRelatedToIndexable(args.Indexable, ContentSearchManager.Indexes);
+        }
+        IEnumerable<Tuple<ISearchIndex, int>> enumerable2 = RankContextIndexes(enumerable, indexable);
+        Tuple<ISearchIndex, int>[] array = (enumerable2 as Tuple<ISearchIndex, int>[]) ?? enumerable2.ToArray();
+        if (!array.Any())
+        {
+          Log.Error($"There is no appropriate index for {indexable.AbsolutePath} - {indexable.Id}. You have to add an index crawler that will cover this item", this);
+          return null;
+        }
+        if (array.Count() == 1)
+        {
+          return array.First().Item1.Name;
+        }
+        if (array.First().Item2 < array.Skip(1).First().Item2)
+        {
+          return array.First().Item1.Name;
+        }
+        string setting = settings.GetSetting("ContentSearch.DefaultIndexType", "");
+        Type defaultType = ReflectionUtil.GetTypeInfo(setting);
+        if (defaultType == null)
+        {
+          return array[0].Item1.Name;
+        }
+        Tuple<ISearchIndex, int>[] array2 = (from i in array
+          where i.Item1.GetType() == defaultType
+          orderby i.Item1.Name
+          select i).ToArray();
+        if (!array2.Any())
+        {
+          return array[0].Item1.Name;
+        }
+        return array2[0].Item1.Name;
       }
-      IEnumerable<ISearchIndex> enumerable = list.AsEnumerable();
-      if (!enumerable.Any())
+      catch (System.InvalidOperationException)
       {
-        enumerable = FindIndexesRelatedToIndexable(args.Indexable, ContentSearchManager.Indexes);
-      }
-      IEnumerable<Tuple<ISearchIndex, int>> enumerable2 = RankContextIndexes(enumerable, indexable);
-      Tuple<ISearchIndex, int>[] array = (enumerable2 as Tuple<ISearchIndex, int>[]) ?? enumerable2.ToArray();
-      if (!array.Any())
-      {
-        Log.Error($"There is no appropriate index for {indexable.AbsolutePath} - {indexable.Id}. You have to add an index crawler that will cover this item", this);
+        Log.Warn(
+          "Sitecore.Support.317501: " + args.Indexable.AbsolutePath + " is excluded and cannot be covered by any index.",
+          this);
         return null;
       }
-      if (array.Count() == 1)
-      {
-        return array.First().Item1.Name;
-      }
-      if (array.First().Item2 < array.Skip(1).First().Item2)
-      {
-        return array.First().Item1.Name;
-      }
-      string setting = settings.GetSetting("ContentSearch.DefaultIndexType", "");
-      Type defaultType = ReflectionUtil.GetTypeInfo(setting);
-      if (defaultType == null)
-      {
-        return array[0].Item1.Name;
-      }
-      Tuple<ISearchIndex, int>[] array2 = (from i in array
-                                           where i.Item1.GetType() == defaultType
-                                           orderby i.Item1.Name
-                                           select i).ToArray();
-      if (!array2.Any())
-      {
-        return array[0].Item1.Name;
-      }
-      return array2[0].Item1.Name;
     }
 
     protected virtual IEnumerable<ISearchIndex> FindIndexesRelatedToIndexable(IIndexable indexable, IEnumerable<ISearchIndex> indexes)
